@@ -61,7 +61,7 @@ impl Field {
     pub fn new() -> Self {
         // initialize an empty field, then make the pen
         let mut empty_grid = vec![];
-        let size: usize = 4;
+        let size: usize = 6;
         let middle = size / 2;
         let mut sheep = Sheep::new();
         let mut dog = Dog::new();
@@ -69,12 +69,14 @@ impl Field {
         //sheep starting position
         // sheep.x = middle as i32 - 2;
         // sheep.y = middle as i32 - 1;
-        sheep.x = 0;
-        sheep.y = 0;
+        sheep.x = 2;
+        sheep.y = 2;
 
         // dog starting position
-        dog.y = size as i32;
-        dog.x = size as i32;
+        // dog.y = size as i32;
+        // dog.x = size as i32;
+        dog.y = 1;
+        dog.x = 1;
 
         for i in 0..size + 1 {
             let mut row = Vec::new();
@@ -85,14 +87,18 @@ impl Field {
         }
 
         // left wall
-        empty_grid[middle - 1][middle - 1] = Cell::new(middle as i32 - 1, middle as i32 - 1, Entity::Fence);
-        empty_grid[middle][middle - 1] = Cell::new(middle as i32- 1, middle as i32, Entity::Fence);
-        empty_grid[middle + 1][middle - 1] = Cell::new(middle as i32 - 1, middle as i32 + 1, Entity::Fence);
+        empty_grid[middle - 1][middle - 1] =
+            Cell::new(middle as i32 - 1, middle as i32 - 1, Entity::Fence);
+        empty_grid[middle][middle - 1] = Cell::new(middle as i32 - 1, middle as i32, Entity::Fence);
+        empty_grid[middle + 1][middle - 1] =
+            Cell::new(middle as i32 - 1, middle as i32 + 1, Entity::Fence);
 
         // right wall
-        empty_grid[middle - 1][middle + 1] = Cell::new(middle as i32 + 1, middle as i32 - 1, Entity::Fence);
+        empty_grid[middle - 1][middle + 1] =
+            Cell::new(middle as i32 + 1, middle as i32 - 1, Entity::Fence);
         empty_grid[middle][middle + 1] = Cell::new(middle as i32 + 1, middle as i32, Entity::Fence);
-        empty_grid[middle + 1][middle + 1] = Cell::new(middle as i32 + 1, middle as i32 + 1, Entity::Fence);
+        empty_grid[middle + 1][middle + 1] =
+            Cell::new(middle as i32 + 1, middle as i32 + 1, Entity::Fence);
 
         // bottom of pen
         empty_grid[middle + 1][middle] = Cell::new(26, 25, Entity::Fence);
@@ -174,7 +180,7 @@ impl Field {
                 match self.grid.get(row as usize) {
                     Some(grid_row) => match grid_row.get(column as usize) {
                         Some(cell) => match cell.entity {
-                            Entity::Empty => {
+                            Entity::Empty | Entity::Dog => {
                                 let mut sheep_cell = cell.clone();
                                 sheep_cell.entity = Entity::Sheep;
                                 moves.push(sheep_cell);
@@ -199,12 +205,12 @@ impl Field {
             let x = self.sheep.x;
             let y = self.sheep.y;
             for sheep_move in self.get_sheep_moves() {
-              if sheep_move.x - position.0 < x - position.0 {
-                possible_moves.push(sheep_move);
-              }
-              if sheep_move.y - position.1 < y - position.1 {
-                possible_moves.push(sheep_move);
-              }
+                if (sheep_move.x - position.0).abs() < (x - position.0).abs() {
+                    possible_moves.push(sheep_move);
+                }
+                if (sheep_move.y - position.1).abs() < (y - position.1).abs() {
+                    possible_moves.push(sheep_move);
+                }
             }
         } else {
             possible_moves = self.get_sheep_moves();
@@ -311,21 +317,23 @@ impl Field {
     }
 
     // calculate the expected moves for a given field
-    pub fn t_star(state: Field,  state_set: &mut HashMap<(Sheep, Dog), i32>) -> i32 {
+    pub fn t_star(state: Field, state_set: &mut HashMap<(Sheep, Dog), i32>) -> i32 {
         let sheep_cell = state.sheep.as_cell();
         let dog_cell = state.dog.as_cell();
         let sheep_pos = (sheep_cell.x, sheep_cell.y);
         let dog_pos = (dog_cell.x, dog_cell.y);
 
         // if the sheep is caught, return 0 since the task is over
-        if sheep_pos == (state.grid.len() as i32, state.grid.len() as i32) {
+        if sheep_pos == (state.grid.len() as i32 / 2, state.grid.len() as i32 / 2) {
             println!("returning a base case");
+            state_set.insert((state.sheep, state.dog), i32::MAX);
             return 0;
         }
 
         // if they have the same position then the dog is dead
         if sheep_pos == dog_pos {
-            println!("returning a base case");
+            println!("returning a base case max");
+            state_set.insert((state.sheep, state.dog), i32::MAX);
             return i32::MAX;
         }
 
@@ -334,21 +342,16 @@ impl Field {
         let possible_states = state.get_dog_states();
         let mut minimum = i32::MAX;
         for possible_state in possible_states {
+            possible_state.print();
+            println!();
             let sheep_states = possible_state.get_sheep_states();
             let number_states = sheep_states.len() as i32;
             let mut summation = 0;
             for sheep_state in sheep_states {
-              if state_set.contains_key(&(state.sheep, state.dog)) {
-                let value = *state_set.get(&(state.sheep, state.dog)).unwrap();
-                if value == -1 {
-                  continue;
-                } else {
-                  summation = summation + 1 / number_states * value;
-                }
-              }
-                let new_val = Field::t_star(sheep_state, state_set);
-                state_set.insert((state.sheep, state.dog), -1);
-                summation = summation + 1 / number_states * new_val;
+                state_set.insert((sheep_state.sheep, sheep_state.dog), i32::MAX);
+                sheep_state.print();
+                println!();
+                summation = summation + 1 / number_states * Field::t_star(sheep_state, state_set);
             }
             if summation < minimum {
                 minimum = summation;

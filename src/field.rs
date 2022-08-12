@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use rand::{self, seq::SliceRandom};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Sheep {
-    x: i32,
-    y: i32,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Sheep {
@@ -13,7 +13,7 @@ impl Sheep {
         Self { x: 0, y: 0 }
     }
 
-    fn at(x: i32, y: i32) -> Self {
+    pub fn at(x: i32, y: i32) -> Self {
         Self { x, y }
     }
 
@@ -26,10 +26,10 @@ impl Sheep {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Dog {
-    x: i32,
-    y: i32,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Dog {
@@ -37,7 +37,7 @@ impl Dog {
         Self { x: 0, y: 0 }
     }
 
-    fn at(x: i32, y: i32) -> Self {
+    pub fn at(x: i32, y: i32) -> Self {
         Self { x, y }
     }
 
@@ -53,15 +53,15 @@ impl Dog {
 #[derive(Clone)]
 pub struct Field {
     pub grid: Vec<Vec<Cell>>,
-    sheep: Sheep,
-    dog: Dog,
+    pub sheep: Sheep,
+    pub dog: Dog,
 }
 
 impl Field {
     pub fn new() -> Self {
         // initialize an empty field, then make the pen
         let mut empty_grid = vec![];
-        let size: usize = 6;
+        let size: usize = 20;
         let middle = size / 2;
         let mut sheep = Sheep::new();
         let mut dog = Dog::new();
@@ -69,14 +69,14 @@ impl Field {
         //sheep starting position
         // sheep.x = middle as i32 - 2;
         // sheep.y = middle as i32 - 1;
-        sheep.x = 2;
-        sheep.y = 2;
+        sheep.x = 1;
+        sheep.y = 1;
 
         // dog starting position
         // dog.y = size as i32;
         // dog.x = size as i32;
-        dog.y = 1;
-        dog.x = 1;
+        dog.y = 0;
+        dog.x = 0;
 
         for i in 0..size + 1 {
             let mut row = Vec::new();
@@ -101,7 +101,7 @@ impl Field {
             Cell::new(middle as i32 + 1, middle as i32 + 1, Entity::Fence);
 
         // bottom of pen
-        empty_grid[middle + 1][middle] = Cell::new(26, 25, Entity::Fence);
+        empty_grid[middle + 1][middle] = Cell::new(middle as i32 + 1, middle as i32, Entity::Fence);
 
         // put the sheep on the grid
         empty_grid[sheep.y as usize][sheep.x as usize] = sheep.as_cell();
@@ -116,6 +116,12 @@ impl Field {
         };
     }
 
+    pub fn with(sheep: Sheep, dog: Dog) -> Self {
+        let mut field = Field::new();
+        field.move_dog_to(dog.as_cell());
+        field.move_sheep_to(sheep.as_cell());
+        field
+    }
     // dog related functions
 
     fn get_dog_moves(&self) -> Vec<Cell> {
@@ -146,7 +152,7 @@ impl Field {
         moves
     }
 
-    fn move_dog_to(&self, cell: Cell) -> Field {
+    pub fn move_dog_to(&self, cell: Cell) -> Field {
         let mut new_field = self.clone();
         let old_dog = self.dog.as_cell();
         new_field.grid[cell.y as usize][cell.x as usize] = cell;
@@ -316,49 +322,8 @@ impl Field {
         None
     }
 
-    // calculate the expected moves for a given field
-    pub fn t_star(state: Field, state_set: &mut HashMap<(Sheep, Dog), i32>) -> i32 {
-        let sheep_cell = state.sheep.as_cell();
-        let dog_cell = state.dog.as_cell();
-        let sheep_pos = (sheep_cell.x, sheep_cell.y);
-        let dog_pos = (dog_cell.x, dog_cell.y);
-
-        // if the sheep is caught, return 0 since the task is over
-        if sheep_pos == (state.grid.len() as i32 / 2, state.grid.len() as i32 / 2) {
-            println!("returning a base case");
-            state_set.insert((state.sheep, state.dog), i32::MAX);
-            return 0;
-        }
-
-        // if they have the same position then the dog is dead
-        if sheep_pos == dog_pos {
-            println!("returning a base case max");
-            state_set.insert((state.sheep, state.dog), i32::MAX);
-            return i32::MAX;
-        }
-
-        // here we use the recursive definition in order to get the cost
-        // find all of the moves that the dog can make and the states that result
-        let possible_states = state.get_dog_states();
-        let mut minimum = i32::MAX;
-        for possible_state in possible_states {
-            possible_state.print();
-            println!();
-            let sheep_states = possible_state.get_sheep_states();
-            let number_states = sheep_states.len() as i32;
-            let mut summation = 0;
-            for sheep_state in sheep_states {
-                state_set.insert((sheep_state.sheep, sheep_state.dog), i32::MAX);
-                sheep_state.print();
-                println!();
-                summation = summation + 1 / number_states * Field::t_star(sheep_state, state_set);
-            }
-            if summation < minimum {
-                minimum = summation;
-            }
-        }
-        println!("returning {}", minimum);
-        minimum
+    fn hueristic(&self) -> f32 {
+        0.0
     }
 
     pub fn print(&self) {
@@ -378,7 +343,7 @@ impl Field {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Entity {
+pub enum Entity {
     Empty,
     Fence,
     Sheep,
@@ -389,7 +354,7 @@ enum Entity {
 pub struct Cell {
     x: i32,
     y: i32,
-    entity: Entity,
+    pub entity: Entity,
 }
 
 impl Cell {

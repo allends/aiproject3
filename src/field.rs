@@ -1,15 +1,15 @@
 use std::collections::HashMap;
-
+use serde::{Serialize, Deserialize};
 use rand::{self, seq::SliceRandom};
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct Sheep {
     pub x: i32,
     pub y: i32,
 }
 
 impl Sheep {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { x: 0, y: 0 }
     }
 
@@ -26,14 +26,14 @@ impl Sheep {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct Dog {
     pub x: i32,
     pub y: i32,
 }
 
 impl Dog {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { x: 0, y: 0 }
     }
 
@@ -61,7 +61,7 @@ impl Field {
     pub fn new() -> Self {
         // initialize an empty field, then make the pen
         let mut empty_grid = vec![];
-        let size: usize = 20;
+        let size: usize = 24;
         let middle = size / 2;
         let mut sheep = Sheep::new();
         let mut dog = Dog::new();
@@ -69,14 +69,14 @@ impl Field {
         //sheep starting position
         // sheep.x = middle as i32 - 2;
         // sheep.y = middle as i32 - 1;
-        sheep.x = 1;
-        sheep.y = 1;
+        sheep.x = 0;
+        sheep.y = 0;
 
         // dog starting position
         // dog.y = size as i32;
         // dog.x = size as i32;
-        dog.y = 0;
-        dog.x = 0;
+        dog.y = 24;
+        dog.x = 24;
 
         for i in 0..size + 1 {
             let mut row = Vec::new();
@@ -117,10 +117,10 @@ impl Field {
     }
 
     pub fn with(sheep: Sheep, dog: Dog) -> Self {
-        let mut field = Field::new();
-        field.move_dog_to(dog.as_cell());
-        field.move_sheep_to(sheep.as_cell());
-        field
+        let field = Field::new();
+        let dog_moved = field.move_dog_to(dog.as_cell());
+        let sheep_moved = dog_moved.move_sheep_to(sheep.as_cell());
+        sheep_moved
     }
     // dog related functions
 
@@ -320,6 +320,10 @@ impl Field {
             }
         }
         None
+    }
+
+    pub fn won(&self) -> bool {
+        self.sheep.x == self.grid.len() as i32 / 2 && self.sheep.y == self.grid.len() as i32 / 2
     }
 
     fn hueristic(&self) -> f32 {

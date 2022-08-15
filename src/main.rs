@@ -1,255 +1,162 @@
+mod data;
 mod field;
+mod math;
+mod simulations;
+mod solve_markov;
+
+#[macro_use]
+extern crate queues;
 use std::collections::HashMap;
-use std::fs::File;
-use std::path::Path;
-use std::io::{Read, Write, Result};
-use crate::field::{Cell, Dog, Entity, Field, Sheep};
+use std::hash::Hash;
 
-fn to_key(key: (Sheep, Dog)) -> String{
-    serde_json::to_string(&key).unwrap_or("".to_string())
+use crate::data::{load_partitioned_data, load_distance_data, save_distance_data};
+use crate::field::{Dog, Field, Sheep};
+use crate::math::bfs_sheep;
+use crate::simulations::run_simulation_with_model;
+use data::load_utility_map;
+use math::{
+    dot_product, loss, model_1, model_2, scalar_multiple, vector_subtraction, weighted_loss, bfs_dog,
+};
+use rand::seq::SliceRandom;
+use rand::Rng;
+
+fn stochastic_gradient_descent(
+    data: (
+        Vec<((Sheep, Dog), f32)>,
+        Vec<((Sheep, Dog), f32)>,
+        Vec<((Sheep, Dog), f32)>,
+    ),
+) -> (f32, f32, f32, f32, f32) {
+    let distance_map_sheep = make_distance_map_sheep();
+    println!("loaded the distance maps");
+    let training_data = data.0.clone();
+    let learning_rate = 0.0000003;
+    let file_path = "stochastic_gradient_descent_loss2.csv";
+    let mut wtr = match csv::Writer::from_path(file_path) {
+        Ok(writer) => writer,
+        Err(_) => return (0.0, 0.0, 0.0, 0.0, 0.0),
+    };
+
+    let mut rng = rand::thread_rng();
+    let w0 = (
+        rng.gen::<f32>() / 10.0,
+        rng.gen::<f32>() / 10.0,
+        rng.gen::<f32>() / 10.0,
+        rng.gen::<f32>() / 10.0,
+        rng.gen::<f32>() / 10.0,
+    );
+
+    let mut w_k = w0.clone();
+    let unit_vector = (1.0, 1.0, 1.0, 1.0, 1.0);
+    let mut loss_value = weighted_loss(&data.0, w_k);
+    let mut best_vector = unit_vector;
+    for iteration in 0..10000 {
+        let data_point = training_data.choose(&mut rng).unwrap();
+        let data_vector = model_2(data_point.0, &distance_map_sheep);
+        let test_value = dot_product(data_vector, w_k);
+        let difference = test_value - data_point.1;
+        let difference_vector =
+            scalar_multiple(scalar_multiple(data_vector, difference), learning_rate);
+        let new_vector = vector_subtraction(difference_vector, w_k);
+
+        let new_vector_loss_testing = weighted_loss(&data.1, new_vector);
+
+        let _result = wtr.write_record(&[
+            format!("{}", iteration),
+            format!("{}", loss_value),
+            format!("{}", new_vector_loss_testing),
+        ]);
+
+        if new_vector_loss_testing < loss_value {
+            loss_value = new_vector_loss_testing;
+            best_vector = new_vector;
+        }
+        if dot_product(unit_vector, new_vector) > 1000.0 {
+            w_k = best_vector;
+        } else if new_vector_loss_testing > 10.0 + loss_value {
+            w_k = best_vector;
+        } else {
+            w_k = new_vector;
+        }
+    }
+    let _result = wtr.write_record(&[format!("{:?}", best_vector), format!("{}", loss_value)]);
+    let _result = wtr.flush();
+    println!("{}", loss_value);
+    best_vector
 }
 
-fn from_serialized(json: String) -> (Sheep, Dog) {
-    serde_json::from_str(&json).unwrap_or((Sheep::new(), Dog::new()))
+fn make_distance_map_sheep() -> HashMap<Sheep, f32> {
+    let mut result = HashMap::new();
+    for row in 0..31 {
+        for column in 0..31 {
+            let sheep = Sheep::at(column, row);
+            let position = if row == 0 && column == 0 { 1 } else { 0 };
+            let dog = Dog::at(position, position);
+            result.insert(sheep, bfs_sheep((sheep, dog)));
+        }
+    }
+    result
 }
 
-// t-star is a hashmap that has states as keys and stores floats as values
-// output should be a float
-
-// make first value distance to the top + 2
-// t_star(hashmap) -> hashmap
-// calculate the expected moves for a given field
-pub fn t_star(old_utility_map: HashMap<(Sheep, Dog), f32>) -> HashMap<(Sheep, Dog), f32> {
-    let mut new_utility_map = HashMap::new();
-    let beta = 0.99;
-
-    for ((sheep, dog), _value) in &old_utility_map {
-        if new_utility_map.contains_key(&(*sheep, *dog)) {
-            continue;
-        }
-        let state = Field::with(*sheep, *dog);
-        let possible_states = state.get_dog_states();
-
-        let mut minimum = f32::MAX;
-        let sheep_pos = (sheep.x, sheep.y);
-        let dog_pos = (dog.x, dog.y);
-        let goal_pos = (state.grid.len() as i32 / 2, state.grid.len() as i32 / 2);
-
-        if sheep_pos == dog_pos {
-            new_utility_map.insert((*sheep, *dog), f32::MAX);
-            continue;
-        } else if sheep_pos == goal_pos {
-            new_utility_map.insert((*sheep, *dog), 0.0);
-            continue;
-        }
-
-        for possible_state in possible_states {
-            let sheep_states = possible_state.get_sheep_states();
-            let number_states = sheep_states.len() as i32;
-            let mut summation = 0.0;
-            for sheep_state in sheep_states {
-
-                let sheep_pos = (sheep_state.sheep.x, sheep_state.sheep.y);
-                let dog_pos = (sheep_state.dog.x, sheep_state.dog.y);
-                let goal_pos = (state.grid.len() as i32 / 2, state.grid.len() as i32 / 2);
-
-                if sheep_pos == dog_pos {
-                    new_utility_map.insert((sheep_state.sheep, sheep_state.dog), f32::MAX);
-                    continue;
-                } else if sheep_pos == goal_pos {
-                    continue;
+fn make_distance_map_dog() -> HashMap<(Sheep, Dog), f32> {
+    let mut result = HashMap::new();
+    for row in 0..31 {
+        for column in 0..31 {
+            let dog = Dog::at(column, row);
+            for row in 0..31 {
+                for column in 0..31 {
+                    let sheep = Sheep::at(row, column);
+                    result.insert((sheep, dog), bfs_dog((sheep, dog)));
                 }
-                summation = summation + (1.0 as f32 / number_states as f32) * old_utility_map.get(&(sheep_state.sheep, sheep_state.dog)).unwrap();
-            }
-            if summation < minimum {
-                minimum = summation;
-            }
-        }
-        new_utility_map.insert((*sheep, *dog), 1.0 + beta * minimum);
-    }
-
-    new_utility_map
-}
-
-fn generate_optimal_utlility() -> HashMap<(Sheep, Dog), f32> {
-    let mut utility_map = HashMap::new();
-
-    let test_field = Field::new();
-
-    for sheep_cell in test_field
-        .grid
-        .clone()
-        .into_iter()
-        .flatten()
-        .collect::<Vec<Cell>>()
-    {
-        let mut new_sheep_cell = sheep_cell.clone();
-        new_sheep_cell.entity = Entity::Sheep;
-        let intermediate_state = test_field.move_sheep_to(new_sheep_cell);
-        for dog_cell in intermediate_state
-            .grid
-            .clone()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<Cell>>()
-        {
-            let mut new_dog_cell = dog_cell.clone();
-            new_dog_cell.entity = Entity::Dog;
-            let final_state = intermediate_state.move_dog_to(new_dog_cell);
-            let sheep_pos = (final_state.sheep.x, final_state.sheep.y);
-            let dog_pos = (final_state.dog.x, final_state.dog.y);
-            let goal_pos = (
-                final_state.grid.len() as i32 / 2,
-                final_state.grid.len() as i32 / 2,
-            );
-            if goal_pos == sheep_pos {
-                utility_map.insert((final_state.sheep, final_state.dog), 0.0);
-            }
-
-            if dog_pos == sheep_pos {
-                utility_map.insert((final_state.sheep, final_state.dog), f32::MAX);
-            }
-            let sheep_goal_distance: f32 = (sheep_pos.0 - goal_pos.0).abs() as f32
-                + (sheep_pos.1 - goal_pos.1).abs() as f32
-                + 2.0;
-            let initial_score =  sheep_goal_distance;
-            utility_map.insert((final_state.sheep, final_state.dog), initial_score);
-        }
-    }
-
-    println!("{:?}", utility_map.len());
-
-    loop {
-        let updated_map = t_star(utility_map.clone());
-
-        // checking the expexted moves left from corner to corner
-        let sheep = Sheep::at(0, 0);
-        let dog = Dog::at(24, 24);
-        let old_value = utility_map.get(&(sheep, dog)).unwrap();
-        let new_value = updated_map.get(&(sheep, dog)).unwrap();
-        println!("{} -> {}", old_value, new_value);
-        if update_size(&utility_map, &updated_map) < 0.01 {
-            return updated_map;
-        }
-        utility_map = updated_map;
-    }
-    
-    utility_map
-}
-
-fn save_utility_map<P: AsRef<Path>>(path: P, map: HashMap<(Sheep, Dog), f32>) -> Result<()> {
-    let mut new_map = HashMap::new();
-    for (key, value) in &map {
-        new_map.insert(to_key(*key), value);
-    }
-    let mut f = File::create(path)?;
-    println!("created the file");
-    match serde_json::to_vec(&map) {
-        Ok(_) => (),
-        Err(e) => println!("{}", e),
-    }
-    let buf = serde_json::to_vec(&new_map)?;
-    println!("serialized the data structure");
-    f.write_all(&buf[..])?;
-    println!("wrote to the file");
-    Ok(())
-}
-
-fn update_size(old_map: & HashMap<(Sheep, Dog), f32>, new_map: & HashMap<(Sheep, Dog), f32>) -> f32 {
-    let mut summation: f32 = 0.0;
-    for (key, value) in old_map {
-        let new_val = new_map.get(&key).unwrap();
-        let difference = value - new_val;
-        summation = summation + difference.abs();
-    }
-     2.0 * summation / (1.0 - 0.99)
-}
-
-fn inner_load_utility_map<P: AsRef<Path>>(path: P) -> Option<HashMap<String, f32>> {
-    if let Ok(mut file) = File::open(path) {
-        let mut buf = vec![];
-        if file.read_to_end(&mut buf).is_ok() {
-            if let Ok(map ) = serde_json::from_slice(&buf[..]) {
-                return Some(map);
             }
         }
     }
-    None
+    result
 }
 
-fn load_utility_map<P: AsRef<Path>>(path: P) -> HashMap<(Sheep, Dog), f32> {
-    match inner_load_utility_map(path) {
-        Some(map) => {
-            let mut new_map = HashMap::new();
-            for (key, value) in &map {
-                new_map.insert(from_serialized(key.clone()), *value);
-            }
-            return new_map;
-        },
-        None => return generate_optimal_utlility(),
-    }
-}
+fn run_simulations(model: (f32, f32, f32, f32, f32), map: HashMap<(Sheep, Dog), f32>) {
+    let mut average = 0.0;
+    let mut games_won = 0.0;
+    let mut games_expired = 0.0;
+    let distance_map_sheep = make_distance_map_sheep();
 
-fn find_best_starting_location(map: & HashMap<(Sheep, Dog), f32>) -> Field {
-    let test_field = Field::new();
-    let mut lowest_score = f32::MAX;
-    let mut best_field = test_field.clone();
-    for dog_cell in test_field
-        .grid
-        .clone()
-        .into_iter()
-        .flatten()
-        .collect::<Vec<Cell>>()
-    {
-        let mut new_dog_cell = dog_cell.clone();
-        new_dog_cell.entity = Entity::Dog;
-        let intermediate_state = test_field.move_dog_to(new_dog_cell);
-        let new_score = map.get(&(intermediate_state.sheep, intermediate_state.dog)).unwrap();
-        if *new_score < lowest_score {
-            lowest_score = *new_score;
-            best_field = intermediate_state;
+    for _ in 0..1000 {
+        let (difference, game_won) = run_simulation_with_model(model, &map, &distance_map_sheep);
+        if game_won {
+            average = average + difference;
+            games_won = games_won + 1.0;
+        }
+        if !game_won && difference == 251.0 {
+            games_expired = games_expired + 1.0;
         }
     }
-    best_field
+    average = average / games_won;
+    println!(
+        "{} across {} games. {} games expired. {} lost",
+        average,
+        games_won,
+        games_expired,
+        10.0 - games_won - games_expired
+    );
 }
-
-fn run_simulation(map: & HashMap<(Sheep, Dog), f32>) -> f32 {
-    let mut game = find_best_starting_location(&map);
-    let expexted_moves = map.get(&(game.sheep, game.dog)).unwrap();
-    let mut actual_moves = 0.0;
-    while !game.won() {
-        let possible_states = game.get_dog_states();
-        let mut best_state = possible_states[0].clone();
-        let mut best_value = map.get(&(best_state.sheep, best_state.dog)).unwrap();
-        for possible_state in possible_states {
-            let test_value =  map.get(&(possible_state.sheep, possible_state.dog)).unwrap();
-            if test_value < best_value {
-                best_state = possible_state;
-                best_value = test_value;
-            }
-        }
-        game = best_state;
-        actual_moves = actual_moves + 1.0;
-        game.move_sheep();
-        game.print();
-        println!();
-    }
-
-    expexted_moves - actual_moves
-} 
 
 fn main() {
-    let map = load_utility_map("cached_utility_map");
-    
-    let best_start = find_best_starting_location(&map);
-    best_start.print();
+    let name = "cached_utlity_map_31x31";
+    let data_file = "partitioned_data";
+    let map = load_utility_map(name);
+    // let partitioned_data = load_partitioned_data(data_file, &map);
+    println!("loaded the map");
 
-    let difference = run_simulation(&map);
-    println!("{}", difference);
+    // let best_model = stochastic_gradient_descent(partitioned_data);
+    // println!("{:?}", best_model);
 
-    // let result = save_utility_map("cached_utility_map", map);
-    // match result {
-    //     Err(_) => println!("couldn't save the file"),
-    //     Ok(_) => println!("saved successfully"),
-    // }
+
+    // let model = stochastic_gradient_descent(partitioned_data);
+    let model_latest_try = (0.5948616, 0.62768173, 0.07846236, 0.4726258, 0.0911483);
+    // let best_model2 = (0.33271807, 0.8405044, 0.022575932, 0.52544063, 0.09900899);
+    // let best_model = (0.66582894, 0.6932436, 0.056437638, 0.3580382, 0.04303138); // avg error 17.512537
+    // let model_2_trial2 = (0.5116242, 0.68731534, 0.09846029, 0.44221365, 0.0347358);
+    run_simulations(model_latest_try, map);
+    // let _result = save_partitioned_data(data_file, partitioned_data);
+    // let _result = save_utility_map(name, map);
 }

@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 use rand::{self, seq::SliceRandom};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct Sheep {
@@ -50,7 +49,7 @@ impl Dog {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Field {
     pub grid: Vec<Vec<Cell>>,
     pub sheep: Sheep,
@@ -61,26 +60,22 @@ impl Field {
     pub fn new() -> Self {
         // initialize an empty field, then make the pen
         let mut empty_grid = vec![];
-        let size: usize = 24;
-        let middle = size / 2;
+        let size: usize = 31;
+        let middle = (size - 1) / 2;
         let mut sheep = Sheep::new();
         let mut dog = Dog::new();
 
         //sheep starting position
-        // sheep.x = middle as i32 - 2;
-        // sheep.y = middle as i32 - 1;
         sheep.x = 0;
         sheep.y = 0;
 
         // dog starting position
-        // dog.y = size as i32;
-        // dog.x = size as i32;
-        dog.y = 24;
-        dog.x = 24;
+        dog.y = size as i32 - 1;
+        dog.x = size as i32 - 1;
 
-        for i in 0..size + 1 {
+        for i in 0..size {
             let mut row = Vec::new();
-            for j in 0..size + 1 {
+            for j in 0..size {
                 row.push(Cell::new(j as i32, i as i32, Entity::Empty));
             }
             empty_grid.push(row);
@@ -116,11 +111,42 @@ impl Field {
         };
     }
 
+    pub fn is_valid(&self) -> bool {
+        let size: usize = self.grid.len();
+        let middle = (size - 1) / 2;
+        let grid = self.grid.clone();
+
+        // left wall
+        let left_wall = grid[middle - 1][middle - 1].entity == Entity::Fence
+            && grid[middle][middle - 1].entity == Entity::Fence
+            && grid[middle + 1][middle - 1].entity == Entity::Fence;
+
+        // right wall
+        let right_wall = grid[middle - 1][middle + 1].entity == Entity::Fence
+            && grid[middle][middle + 1].entity == Entity::Fence
+            && grid[middle + 1][middle + 1].entity == Entity::Fence;
+
+        // bottom of pen
+        let bottom_wall = grid[middle + 1][middle].entity == Entity::Fence;
+
+        return left_wall && right_wall && bottom_wall;
+    }
+
+    pub fn sheep_won(&self) -> bool {
+        self.dog.x == self.sheep.x && self.dog.y == self.sheep.y
+    }
+
     pub fn with(sheep: Sheep, dog: Dog) -> Self {
-        let field = Field::new();
-        let dog_moved = field.move_dog_to(dog.as_cell());
-        let sheep_moved = dog_moved.move_sheep_to(sheep.as_cell());
-        sheep_moved
+        let mut field = Field::new();
+        let old_dog = field.dog;
+        let old_sheep = field.sheep;
+        field.grid[old_sheep.y as usize][old_sheep.x as usize].entity = Entity::Empty;
+        field.grid[old_dog.y as usize][old_dog.x as usize].entity = Entity::Empty;
+        field.sheep = sheep;
+        field.dog = dog;
+        field.grid[sheep.y as usize][sheep.x as usize].entity = Entity::Sheep;
+        field.grid[dog.y as usize][dog.x as usize].entity = Entity::Dog;
+        field
     }
     // dog related functions
 
@@ -137,6 +163,34 @@ impl Field {
                     Some(row) => match row.get(column as usize) {
                         Some(cell) => match cell.entity {
                             Entity::Empty => {
+                                let mut dog_cell = cell.clone();
+                                dog_cell.entity = Entity::Dog;
+                                moves.push(dog_cell);
+                            }
+                            _ => continue,
+                        },
+                        None => continue,
+                    },
+                    None => continue,
+                };
+            }
+        }
+        moves
+    }
+
+    fn get_dog_moves_ignore_sheep(&self) -> Vec<Cell> {
+        let x = self.dog.x;
+        let y = self.dog.y;
+        let mut moves = Vec::<Cell>::new();
+        for row in y - 1..y + 2 {
+            for column in x - 1..x + 2 {
+                if column == x && row == y {
+                    continue;
+                }
+                match self.grid.get(row as usize) {
+                    Some(row) => match row.get(column as usize) {
+                        Some(cell) => match cell.entity {
+                            Entity::Empty | Entity::Sheep => {
                                 let mut dog_cell = cell.clone();
                                 dog_cell.entity = Entity::Dog;
                                 moves.push(dog_cell);
@@ -202,6 +256,24 @@ impl Field {
         moves
     }
 
+    pub fn get_sheep_moves_bfs(&self) -> Vec<Field> {
+        let mut states = Vec::<Field>::new();
+        let possible_moves = self.get_sheep_moves();
+        for possible_move in possible_moves {
+            states.push(self.move_sheep_to(possible_move));
+        }
+        states
+    }
+
+    pub fn get_dog_moves_bfs(&self) -> Vec<Field> {
+        let mut states = Vec::<Field>::new();
+        let possible_moves = self.get_dog_moves_ignore_sheep();
+        for possible_move in possible_moves {
+            states.push(self.move_dog_to(possible_move));
+        }
+        states
+    }
+
     pub fn get_sheep_states(&self) -> Vec<Field> {
         let mut states = Vec::<Field>::new();
         let mut possible_moves = Vec::<Cell>::new();
@@ -210,6 +282,7 @@ impl Field {
             let position = (self.dog.x, self.dog.y);
             let x = self.sheep.x;
             let y = self.sheep.y;
+
             for sheep_move in self.get_sheep_moves() {
                 if (sheep_move.x - position.0).abs() < (x - position.0).abs() {
                     possible_moves.push(sheep_move);
@@ -217,6 +290,10 @@ impl Field {
                 if (sheep_move.y - position.1).abs() < (y - position.1).abs() {
                     possible_moves.push(sheep_move);
                 }
+            }
+
+            if possible_moves.len() == 0 {
+                possible_moves = self.get_sheep_moves();
             }
         } else {
             possible_moves = self.get_sheep_moves();
@@ -232,7 +309,7 @@ impl Field {
         let old_sheep = self.sheep.as_cell();
         new_field.grid[cell.y as usize][cell.x as usize] = cell;
         new_field.grid[old_sheep.y as usize][old_sheep.x as usize] =
-            Cell::new(old_sheep.y, old_sheep.x, Entity::Empty);
+            Cell::new(old_sheep.x, old_sheep.y, Entity::Empty);
         new_field.sheep.x = cell.x;
         new_field.sheep.y = cell.y;
         new_field
@@ -240,54 +317,10 @@ impl Field {
 
     pub fn move_sheep(&mut self) {
         // get the squares nearby and see if the dog is in one of them
-        match self.dog_in_view() {
-            Some(cell) => self.move_sheep_towards((cell.x, cell.y)),
-            None => self.move_sheep_random(),
-        }
-    }
-
-    fn move_sheep_towards(&mut self, position: (i32, i32)) {
-        let x = self.sheep.x;
-        let y = self.sheep.y;
-        let mut moves = Vec::<Cell>::new();
-        if position.0 < x {
-            moves.push(Cell::new(x - 1, y, Entity::Sheep))
-        };
-        if position.0 > x {
-            moves.push(Cell::new(x + 1, y, Entity::Sheep))
-        };
-        if position.1 < y {
-            moves.push(Cell::new(x, y - 1, Entity::Sheep))
-        };
-        if position.1 > y {
-            moves.push(Cell::new(x, y + 1, Entity::Sheep))
-        };
-        let chosen_move = moves.choose(&mut rand::thread_rng()).unwrap();
-        self.grid[self.sheep.y as usize][self.sheep.x as usize].entity = Entity::Empty;
-        self.grid[chosen_move.y as usize][chosen_move.x as usize] = *chosen_move;
-        self.sheep = Sheep::at(chosen_move.x, chosen_move.y);
-    }
-
-    fn move_sheep_random(&mut self) {
-        let x = self.sheep.x;
-        let y = self.sheep.y;
-        let mut moves = Vec::<Cell>::new();
-        if x - 1 >= 0 {
-            moves.push(Cell::new(x - 1, y, Entity::Sheep))
-        };
-        if x + 1 < 51 {
-            moves.push(Cell::new(x + 1, y, Entity::Sheep))
-        };
-        if y - 1 >= 0 {
-            moves.push(Cell::new(x, y - 1, Entity::Sheep))
-        };
-        if y + 1 < 51 {
-            moves.push(Cell::new(x, y + 1, Entity::Sheep))
-        };
-        let chosen_move = moves.choose(&mut rand::thread_rng()).unwrap();
-        self.grid[self.sheep.y as usize][self.sheep.x as usize].entity = Entity::Empty;
-        self.grid[chosen_move.y as usize][chosen_move.x as usize] = *chosen_move;
-        self.sheep = Sheep::at(chosen_move.x, chosen_move.y);
+        let states = self.get_sheep_states();
+        let chosen_move = states.choose(&mut rand::thread_rng()).unwrap();
+        self.grid = chosen_move.grid.clone();
+        self.sheep = chosen_move.sheep;
     }
 
     fn get_sheep_view(&self) -> Vec<Cell> {
@@ -322,12 +355,12 @@ impl Field {
         None
     }
 
-    pub fn won(&self) -> bool {
-        self.sheep.x == self.grid.len() as i32 / 2 && self.sheep.y == self.grid.len() as i32 / 2
-    }
-
-    fn hueristic(&self) -> f32 {
-        0.0
+    pub fn dog_won(&self) -> bool {
+        (self.sheep.x == self.grid.len() as i32 / 2 && self.sheep.y == self.grid.len() as i32 / 2)
+            || ((self.dog.x == self.grid.len() as i32 / 2
+                && self.dog.y == self.grid.len() as i32 / 2)
+                && (self.sheep.x == self.grid.len() as i32 / 2
+                    && self.sheep.y == self.grid.len() as i32 / 2 - 1))
     }
 
     pub fn print(&self) {
@@ -338,7 +371,7 @@ impl Field {
                     Entity::Fence => print!("☐ "),
                     Entity::Sheep => print!("S "),
                     Entity::Dog => print!("D "),
-                    _ => print!("  "),
+                    // _ => print!("  "),
                 }
             }
             println!();
@@ -346,7 +379,7 @@ impl Field {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Hash, Eq)]
 pub enum Entity {
     Empty,
     Fence,
@@ -354,7 +387,7 @@ pub enum Entity {
     Dog,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct Cell {
     x: i32,
     y: i32,
@@ -362,7 +395,7 @@ pub struct Cell {
 }
 
 impl Cell {
-    fn new(x: i32, y: i32, entity: Entity) -> Self {
+    pub fn new(x: i32, y: i32, entity: Entity) -> Self {
         Self { x, y, entity }
     }
 }
